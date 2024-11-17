@@ -1,0 +1,218 @@
+ clear; close all;
+
+%% Configuration Parameters
+config.num_subjects = 11; % Number of subjects per condition
+config.num_channels = 4; % Number of EMG channels (muscles)
+config.muscle_names = {'BF', 'RF', 'ST', 'VM'};
+config.conditions = {'Healthy', 'Abnormal'};
+config.fs = 1000; % Sampling frequency in Hz
+config.hp_cutoff = 20; % High-pass filter cutoff frequency (Hz)
+config.lp_cutoff = 450; % Low-pass filter cutoff frequency (Hz)
+config.notch_freq = 50; % Notch filter frequency (Hz)
+config.window_size = 50; % Smoothing window size in samples
+config.main_dir = '/path/to/Modified Dataset'; % Update with actual dataset path
+config.k_folds = 5; % Number of folds for cross-validation
+config.tuning_iterations = 30; % Hyperparameter optimization iterations
+
+%% Initialize Data Storage
+features = [];
+labels = [];
+
+%% Main Processing
+features_labels = process_all_subjects(config);
+
+% Concatenate features and labels
+features = vertcat(features_labels.features{:});
+labels = vertcat(features_labels.labels{:});
+
+% Perform K-Fold Cross-Validation
+cv_partition = cvpartition(labels, 'KFold', config.k_folds);
+results_table = k_fold_cross_validation(features, labels, cv_partition, config);
+
+% Save Results
+output_file = 'muscle_classification_k_fold_results.csv';
+writetable(results_table, output_file);
+fprintf('Results saved to %s\n', output_file);
+
+%% Function Definitions
+
+function features_labels = process_all_subjects(config)
+    features_labels.features = cell(length(config.conditions), 1);
+    features_labels.labels = cell(length(config.conditions), 1);
+    
+    parfor cond_idx = 1:length(config.conditions)
+        condition = config.conditions{cond_idx};
+        label = strcmp(condition, 'Abnormal'); % Binary: 0 for Healthy, 1 for Abnormal
+        condition_features = [];
+        condition_labels = [];
+        
+        for subj = 1:config.num_subjects
+            try
+                subj_features = process_subject(condition, subj, config);
+                if ~isempty(subj_features)
+                    condition_features = [condition_features; subj_features];
+                    condition_labels = [condition_labels; repmat(label, size(subj_features, 1), 1)];
+                end
+            catch ME
+                warning('Error processing subject %d (%s): %s', subj, condition, ME.message);
+            end
+        end
+        
+        features_labels.features{cond_idx} = condition_features;
+        features_labels.labels{cond_idx} = condition_labels;
+    end
+end
+
+function subj_features = process_subject(condition, subj, config)
+    subj_features = [];
+    
+    for muscle_idx = 1:config.num_channels
+        muscle = config.muscle_names{muscle_idx};
+        data_dir = fullfile(config.main_dir, condition, muscle);
+        file_list = dir(fullfile(data_dir, '*.wav'));
+        
+        if length(file_list) < config.num_subjects
+            warning('Insufficient files for %s condition (%s) subject %d.', condition, muscle, subj);
+            continue;
+        end
+        
+        file_name = fullfile(data_dir, file_list(subj).name);
+        [data, file_fs] = audioread(file_name);
+        
+        % Resample if sampling frequency differs
+        if file_fs ~= config.fs
+            data = resample(data, config.fs, file_fs);
+        end
+        
+        emg_signal = data(:, 1)';
+        
+        % Preprocess Signal
+        emg_filtered = preprocess_emg(emg_signal, config);
+
+        % Rectify and Smooth
+        emg_rectified = abs(emg_filtered);
+        emg_envelope = movmean(emg_rectified, config.window_size);
+
+        % Extract Features
+        [TD_features, FD_features, WF_features] = extract_features(emg_envelope, config.fs);
+        subj_features = [subj_features; TD_features, FD_features, WF_features];
+    end
+end
+
+function emg_filtered = preprocess_emg(emg_signal, config)
+    % Normalize
+    emg_signal = emg_signal / max(abs(emg_signal));
+
+    % High-pass filter
+    [b_hp, a_hp] = butter(4, config.hp_cutoff / (config.fs / 2), 'high');
+    emg_filtered = filtfilt(b_hp, a_hp, emg_signal);
+
+    % Low-pass filter
+    [b_lp, a_lp] = butter(4, config.lp_cutoff / (config.fs / 2), 'low');
+    emg_filtered = filtfilt(b_lp, a_lp, emg_filtered);
+
+    % Notch filter
+    Q = 30;
+    Wo = config.notch_freq / (config.fs / 2);
+    BW = Wo / Q;
+    [b_notch, a_notch] = iirnotch(Wo, BW);
+    emg_filtered = filtfilt(b_notch, a_notch, emg_filtered);
+end
+
+function [TD_features, FD_features, WF_features] = extract_features(emg_envelope, fs)
+    % Time-Domain Features
+    TD_features = [
+        mean(emg_envelope), std(emg_envelope), sum(abs(emg_envelope)), ...
+        mean(abs(emg_envelope)), sum(abs(diff(emg_envelope))), rms(emg_envelope), ...
+        wentropy(emg_envelope, 'shannon')
+    ];
+
+    % Frequency-Domain Features
+    psd = abs(fft(emg_envelope)).^2;
+    freqs = (0:length(psd) - 1) * (fs / length(psd));
+    FD_features = [
+        meanfreq(psd, fs), medfreq(psd, fs), max(freqs(psd == max(psd)))
+    ];
+
+    % Wavelet Features
+    [c, ~] = wavedec(emg_envelope, 4, 'db4');
+    WF_features = [
+        sum(c.^2), wentropy(c, 'shannon'), max(c)
+    ];
+end
+
+function results_table = k_fold_cross_validation(features, labels, cv_partition, config)
+    muscle_names = config.muscle_names;
+    classifiers = {'KNN', 'SVM', 'Random Forest', 'Decision Tree'};
+    TD_indices = 1:7; % Adjust based on feature count
+    FD_indices = 8:10; % Adjust based on feature count
+    WF_indices = 11:13; % Adjust based on feature count
+    
+    num_classifiers = length(classifiers);
+    num_muscles = length(muscle_names);
+    num_folds = cv_partition.NumTestSets;
+    
+    results_table = table('Size', [num_muscles, 1 + num_classifiers * num_folds], ...
+                          'VariableTypes', [{'string'}, repmat({'double'}, 1, num_classifiers * num_folds)], ...
+                          'VariableNames', [{'Muscle'}, strcat(repmat(classifiers, 1, num_folds), '_Fold_', string(1:num_folds))]);
+    
+    for muscle_idx = 1:num_muscles
+        results_row = {muscle_names{muscle_idx}};
+        
+        for clf_idx = 1:num_classifiers
+            classifier = classifiers{clf_idx};
+            
+            fold_accuracies = zeros(1, num_folds);
+            
+            for fold = 1:num_folds
+                train_idx = training(cv_partition, fold);
+                test_idx = test(cv_partition, fold);
+                
+                X_train = features(train_idx, :);
+                y_train = labels(train_idx);
+                X_test = features(test_idx, :);
+                y_test = labels(test_idx);
+                
+                % Train and Evaluate Models
+                models = train_and_tune_classifiers(X_train, y_train, classifier, TD_indices, FD_indices, WF_indices, config);
+                accuracies = evaluate_models(models, X_test, y_test, TD_indices, FD_indices, WF_indices);
+                
+                fold_accuracies(fold) = mean(accuracies);
+            end
+            
+            results_row = [results_row, fold_accuracies];
+        end
+        
+        results_table(muscle_idx, :) = results_row;
+    end
+end
+
+function models = train_and_tune_classifiers(X_train, y_train, classifier, TD_indices, FD_indices, WF_indices, config)
+    options = struct('OptimizeHyperparameters', 'auto', 'HyperparameterOptimizationOptions', struct('MaxObjectiveEvaluations', config.tuning_iterations));
+    switch classifier
+        case 'KNN'
+            models.TD = fitcknn(X_train(:, TD_indices), y_train, options);
+            models.FD = fitcknn(X_train(:, FD_indices), y_train, options);
+            models.WF = fitcknn(X_train(:, WF_indices), y_train, options);
+        case 'SVM'
+            models.TD = fitcsvm(X_train(:, TD_indices), y_train, options);
+            models.FD = fitcsvm(X_train(:, FD_indices), y_train, options);
+            models.WF = fitcsvm(X_train(:, WF_indices), y_train, options);
+        case 'Random Forest'
+            models.TD = fitcensemble(X_train(:, TD_indices), y_train, 'Method', 'Bag', options);
+            models.FD = fitcensemble(X_train(:, FD_indices), y_train, 'Method', 'Bag', options);
+            models.WF = fitcensemble(X_train(:, WF_indices), y_train, 'Method', 'Bag', options);
+        case 'Decision Tree'
+            models.TD = fitctree(X_train(:, TD_indices), y_train, options);
+            models.FD = fitctree(X_train(:, FD_indices), y_train, options);
+            models.WF = fitctree(X_train(:, WF_indices), y_train, options);
+    end
+end
+
+function accuracies = evaluate_models(models, X_test, y_test, TD_indices, FD_indices, WF_indices)
+    accuracies = [
+        100 * mean(predict(models.TD, X_test(:, TD_indices)) == y_test), ...
+        100 * mean(predict(models.FD, X_test(:, FD_indices)) == y_test), ...
+        100 * mean(predict(models.WF, X_test(:, WF_indices)) == y_test)
+    ];
+end
