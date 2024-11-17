@@ -245,3 +245,84 @@ function emg_filtered = preprocess_emg(emg_signal, fs, hp_cutoff, lp_cutoff, not
     emg_filtered = filter(b_hp, a_hp, emg_filtered);
     emg_filtered = filter(b_lp, a_lp, emg_filtered);
 end
+
+%% Perform k-Fold Cross-Validation
+k = 10; % Number of folds
+cv = cvpartition(labels, 'KFold', k);
+
+% Initialize variables to store accuracies for each fold
+overall_results = [];
+
+% Loop through each fold
+for fold = 1:k
+    fprintf('Processing fold %d/%d...\n', fold, k);
+
+    % Get training and testing indices for the current fold
+    train_idx = training(cv, fold);
+    test_idx = test(cv, fold);
+
+    % Create training and testing sets for this fold
+    X_train = features(train_idx, :);
+    y_train = labels(train_idx);
+    X_test = features(test_idx, :);
+    y_test = labels(test_idx);
+
+    % Loop through each muscle
+    for j = 1:num_muscles
+        muscle_name = muscle_names{j};
+
+        % Loop through each classifier
+        for i = 1:num_classifiers
+            classifier_name = classifier_names{i};
+
+            % Choose a model for each classifier
+            switch classifier_name
+                case 'KNN'
+                    TD_model = fitcknn(X_train(:, TD_indices), y_train);
+                    FD_model = fitcknn(X_train(:, FD_indices), y_train);
+                    WF_model = fitcknn(X_train(:, WF_indices), y_train);
+                case 'SVM'
+                    TD_model = fitcsvm(X_train(:, TD_indices), y_train);
+                    FD_model = fitcsvm(X_train(:, FD_indices), y_train);
+                    WF_model = fitcsvm(X_train(:, WF_indices), y_train);
+                case 'Random Forest'
+                    TD_model = fitcensemble(X_train(:, TD_indices), y_train, 'Method', 'Bag');
+                    FD_model = fitcensemble(X_train(:, FD_indices), y_train, 'Method', 'Bag');
+                    WF_model = fitcensemble(X_train(:, WF_indices), y_train, 'Method', 'Bag');
+                case 'Decision Tree'
+                    TD_model = fitctree(X_train(:, TD_indices), y_train);
+                    FD_model = fitctree(X_train(:, FD_indices), y_train);
+                    WF_model = fitctree(X_train(:, WF_indices), y_train);
+            end
+
+            % Evaluate each model
+            TD_predictions = predict(TD_model, X_test(:, TD_indices));
+            FD_predictions = predict(FD_model, X_test(:, FD_indices));
+            WF_predictions = predict(WF_model, X_test(:, WF_indices));
+
+            % Calculate accuracies
+            TD_accuracy = sum(TD_predictions == y_test) / length(y_test) * 100;
+            FD_accuracy = sum(FD_predictions == y_test) / length(y_test) * 100;
+            WF_accuracy = sum(WF_predictions == y_test) / length(y_test) * 100;
+
+            % Store results
+            overall_results = [overall_results; {muscle_name, classifier_name, fold, ...
+                              TD_accuracy, FD_accuracy, WF_accuracy}];
+        end
+    end
+end
+
+% Convert results to a table for easier analysis
+results_table = cell2table(overall_results, ...
+    'VariableNames', {'Muscle', 'Classifier', 'Fold', ...
+                      'TD_Accuracy', 'FD_Accuracy', 'WF_Accuracy'});
+
+% Calculate average accuracy per classifier and muscle across folds
+avg_results = varfun(@mean, results_table, ...
+    'InputVariables', {'TD_Accuracy', 'FD_Accuracy', 'WF_Accuracy'}, ...
+    'GroupingVariables', {'Muscle', 'Classifier'});
+
+% Save results to CSV
+output_file = 'kfold_cross_validation_results.csv';
+writetable(avg_results, output_file);
+fprintf('k-fold cross-validation results saved to %s\n', output_file);
