@@ -1,0 +1,49 @@
+Muscle,Classifier,FeatureType,MeanAccuracy
+BF,KNN,TD,35
+BF,KNN,FD,55
+BF,KNN,Wavelet,50
+BF,SVM,TD,85
+BF,SVM,FD,80
+BF,SVM,Wavelet,80
+BF,Random Forest,TD,65
+BF,Random Forest,FD,55
+BF,Random Forest,Wavelet,40
+BF,Decision Tree,TD,65
+BF,Decision Tree,FD,55
+BF,Decision Tree,Wavelet,40
+RF,KNN,TD,65
+RF,KNN,FD,50
+RF,KNN,Wavelet,75
+RF,SVM,TD,70
+RF,SVM,FD,45
+RF,SVM,Wavelet,75
+RF,Random Forest,TD,70
+RF,Random Forest,FD,55
+RF,Random Forest,Wavelet,70
+RF,Decision Tree,TD,55
+RF,Decision Tree,FD,75
+RF,Decision Tree,Wavelet,60
+ST,KNN,TD,40
+ST,KNN,FD,80
+ST,KNN,Wavelet,45
+ST,SVM,TD,65
+ST,SVM,FD,75
+ST,SVM,Wavelet,55
+ST,Random Forest,TD,65
+ST,Random Forest,FD,70
+ST,Random Forest,Wavelet,70
+ST,Decision Tree,TD,35
+ST,Decision Tree,FD,65
+ST,Decision Tree,Wavelet,75
+VM,KNN,TD,85
+VM,KNN,FD,60
+VM,KNN,Wavelet,95
+VM,SVM,TD,75
+VM,SVM,FD,70
+VM,SVM,Wavelet,85
+VM,Random Forest,TD,80
+VM,Random Forest,FD,80
+VM,Random Forest,Wavelet,95
+VM,Decision Tree,TD,80
+VM,Decision Tree,FD,75
+VM,Decision Tree,Wavelet,95
